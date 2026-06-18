@@ -1,0 +1,141 @@
+# Example OpenLDAP deployment vars.
+# Copy this file to ansible/group_vars/openldap.yml and replace every
+# CHANGE_ME value before running Ansible.
+
+# Public DNS name clients should use. This should point at the load balancer,
+# not at either backend VM.
+ldap_public_hostname: "ldap.example.org"
+
+# Client-facing load balancer address. This is kept here as operator reference;
+# the playbook does not configure DNS or the OpenStack load balancer.
+ldap_load_balancer_ip: "<ldap-load-balancer-ip>"
+
+# Full LDAP URL to give client applications. This baseline uses plain LDAP on
+# 389, so credentials are sent without TLS unless the network is trusted.
+ldap_client_uri: "ldap://ldap.example.org:389"
+
+# DNS-style name used when the slapd package creates the initial database.
+# It should correspond to ldap_base_dn.
+ldap_domain: "example.org"
+
+# Root/suffix of this directory tree. Every user, group, and service account DN
+# lives under this base.
+ldap_base_dn: "dc=example,dc=org"
+
+# The dc attribute value for the root LDAP entry. For the base DN above, this is
+# the leftmost domain component.
+ldap_base_dc: "example"
+
+# Human-readable organization name stored on the root LDAP entry.
+ldap_organization: "Example"
+
+# OpenLDAP database root DN. This is the main directory admin identity for the
+# MDB database and is configured as olcRootDN.
+ldap_admin_dn: "cn=admin,dc=example,dc=org"
+
+# Plaintext admin password used only during first slapd package bootstrap.
+# Keep this in Ansible Vault.
+ldap_debconf_admin_password: "CHANGE_ME_USE_ANSIBLE_VAULT"
+
+# Hashed admin password stored in cn=config as olcRootPW. Generate with
+# slappasswd; OpenLDAP verifies binds against this hash.
+ldap_admin_password_hash: "CHANGE_ME_GENERATE_WITH_SLAPPASSWD"
+
+# DN for the read-only application bind account. Client applications use this
+# account to search users/groups without having admin permissions.
+ldap_readonly_bind_dn: "cn=ldap-readonly,ou=service-accounts,dc=example,dc=org"
+
+# Plaintext read-only bind password kept for operators/client config. Keep this
+# in Ansible Vault if you store it here.
+ldap_readonly_bind_password: "CHANGE_ME_USE_ANSIBLE_VAULT"
+
+# Hashed password stored on the read-only bind LDAP entry as userPassword.
+ldap_readonly_bind_password_hash: "CHANGE_ME_GENERATE_WITH_SLAPPASSWD"
+
+# DN for the replication account. Consumers bind to the provider with this
+# identity when pulling changes with syncrepl.
+ldap_replication_bind_dn: "cn=ldap-replicator,ou=service-accounts,dc=example,dc=org"
+
+# Plaintext replication password required by syncrepl configuration on
+# consumers. This ends up in cn=config on replicas, so vault and protect backups.
+ldap_replication_bind_password: "CHANGE_ME_USE_ANSIBLE_VAULT"
+
+# Hashed password stored on the replication account LDAP entry as userPassword.
+ldap_replication_bind_password_hash: "CHANGE_ME_GENERATE_WITH_SLAPPASSWD"
+
+# Container where human/user LDAP entries will live. Client apps usually search
+# this base with filters such as (uid=<username>).
+ldap_users_ou: "ou=users,dc=example,dc=org"
+
+# Container where LDAP group entries will live. Client apps use this as the
+# group search base.
+ldap_groups_ou: "ou=groups,dc=example,dc=org"
+
+# Container for non-human service identities such as read-only bind and
+# replication accounts.
+ldap_service_accounts_ou: "ou=service-accounts,dc=example,dc=org"
+
+# Replication uses backend private IPs from ansible/inventory.ini, so only the
+# load balancer needs a DNS record.
+
+# Inventory hostname of the writable provider. Consumers replicate from this
+# node, and initial bootstrap data is only added here.
+ldap_provider_host: "{{ groups['openldap'][0] }}"
+
+# LDAP URI consumers use to reach the provider over the private backend network.
+ldap_provider_uri: "ldap://{{ hostvars[ldap_provider_host].ansible_host | default(ldap_provider_host) }}:389"
+
+# LDAP URI for the current node. OpenLDAP uses this in olcServerID, and slapd
+# listens on the same URI so replication can match the node identity.
+ldap_node_uri: "ldap://{{ ansible_host | default(inventory_hostname) }}:389"
+
+# Unique OpenLDAP server ID derived from inventory order. Replication needs
+# stable, distinct server IDs for each node.
+ldap_server_id: "{{ groups['openldap'].index(inventory_hostname) + 1 }}"
+
+# Unique syncrepl replication ID for this node. It must be unique per replicated
+# database on a server; the three-digit format is conventional.
+ldap_replication_rid: "{{ '%03d' | format(groups['openldap'].index(inventory_hostname) + 1) }}"
+
+# syncrepl retry schedule: retry every 5 seconds 5 times, then every 300 seconds
+# 5 times, then continue according to OpenLDAP retry semantics.
+ldap_replication_retry: "5 5 300 5"
+
+# Listener URLs passed to slapd. ldapi:/// is the local root/admin socket used by
+# Ansible; ldap_node_uri is the private network LDAP listener.
+ldap_listen_urls:
+  - "ldapi:///"
+  - "{{ ldap_node_uri }}"
+
+# DN of the OpenLDAP config database. Ansible modifies this through ldapi:/// to
+# set module, server ID, database, ACL, and replication config.
+ldap_config_database_dn: "olcDatabase={0}config,cn=config"
+
+# DN of the main MDB database config entry. This is where suffix, root DN,
+# indexes, ACLs, and syncrepl settings are configured.
+ldap_database_dn: "olcDatabase={1}mdb,cn=config"
+
+# DN of the module loader entry under cn=config. The playbook uses it to check
+# and load the syncprov replication module.
+ldap_module_dn: "cn=module{0},cn=config"
+
+# Maximum MDB database size in bytes. MDB needs a map size limit even when the
+# actual data is much smaller.
+ldap_mdb_max_size: 1073741824
+
+# First-run bootstrap switch. true creates the base DN, OUs, read-only bind, and
+# replication account on the provider. Keep false after the first successful run.
+ldap_apply_bootstrap_data: false
+
+# Enables the local slapcat backup systemd timer installed by the playbook.
+ldap_backup_enabled: true
+
+# Directory on each LDAP VM where local config/data backups are written.
+ldap_backup_dir: "/var/backups/openldap"
+
+# Number of days to keep local backup directories before the backup script
+# removes old ones.
+ldap_backup_retention_days: 14
+
+# systemd OnCalendar value for when the backup timer runs each day.
+ldap_backup_on_calendar: "03:20"

@@ -1,0 +1,42 @@
+name = "openldap"
+
+network_id = "<tenant-network-id>"
+subnet_id  = "<tenant-subnet-id>"
+
+image_name  = "Ubuntu-22.04"
+flavor_name = "m1.small"
+key_pair    = "<openstack-keypair>"
+
+# Total LDAP backend VM count. The first VM becomes the writable provider; every
+# additional VM becomes a read replica. Use 2 for provider + 1 replica, 3 for
+# provider + 2 replicas, and so on.
+instance_count = 2
+
+# Who can SSH directly to the LDAP VMs on 22/tcp.
+# CIDR-only mode: put your admin public IP, VPN CIDR, or bastion CIDR here.
+# No existing source security group is required when this list is populated.
+# Optional alternative: set ssh_allowed_security_group_ids to a bastion/source
+# security group ID instead of, or in addition to, CIDRs.
+# Broad CIDRs such as 0.0.0.0/0 are accepted but risky.
+ssh_allowed_cidrs              = ["<management-cidr>"]
+ssh_allowed_security_group_ids = []
+
+# Who can connect to the load balancer on LDAP 389/tcp.
+# Octavia listener restrictions are CIDR-based, so this remains a CIDR list.
+# Use trusted application, VPN, or corporate client CIDRs for real use.
+# 0.0.0.0/0 is accepted but exposes plaintext LDAP bind traffic with no TLS.
+ldap_allowed_cidrs = ["<trusted-client-or-corporate-cidr>"]
+
+# Who can connect directly to backend LDAP VMs on 389/tcp.
+# Option A: restricted CIDRs, such as the tenant/load-balancer subnet.
+# Option B: source security group IDs, such as an app/LB/backend client group.
+# Broad CIDRs such as 0.0.0.0/0 are accepted but risky.
+backend_allowed_cidrs              = ["<tenant-network-cidr>"]
+backend_allowed_security_group_ids = []
+
+# false: load balancer gets only a private VIP.
+# true: attach a floating IP from external_network_name to the load balancer.
+create_floating_ip    = false
+
+# OpenStack external network/pool name used only when create_floating_ip = true.
+external_network_name = "public"

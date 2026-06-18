@@ -1,0 +1,28 @@
+dn: {{ ldap_database_dn }}
+changetype: modify
+replace: olcRootDN
+olcRootDN: {{ ldap_admin_dn }}
+-
+replace: olcRootPW
+olcRootPW: {{ ldap_admin_password_hash }}
+-
+replace: olcDbMaxSize
+olcDbMaxSize: {{ ldap_mdb_max_size }}
+-
+replace: olcDbIndex
+olcDbIndex: objectClass eq
+olcDbIndex: uid eq,pres,sub
+olcDbIndex: cn eq,pres,sub
+olcDbIndex: mail eq,pres,sub
+olcDbIndex: member eq
+olcDbIndex: entryCSN eq
+olcDbIndex: entryUUID eq
+-
+replace: olcLimits
+olcLimits: dn.exact="{{ ldap_replication_bind_dn }}" time.soft=unlimited time.hard=unlimited size.soft=unlimited size.hard=unlimited
+-
+replace: olcAccess
+olcAccess: {0}to attrs=userPassword by dn.exact="{{ ldap_replication_bind_dn }}" read by self write by dn.exact="{{ ldap_admin_dn }}" write by dn.exact="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth" manage by anonymous auth by * none
+olcAccess: {1}to dn.subtree="{{ ldap_users_ou }}" by dn.exact="{{ ldap_replication_bind_dn }}" read by dn.exact="{{ ldap_admin_dn }}" write by dn.exact="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth" manage by self read by dn.exact="{{ ldap_readonly_bind_dn }}" read by users read by anonymous none
+olcAccess: {2}to dn.subtree="{{ ldap_groups_ou }}" by dn.exact="{{ ldap_replication_bind_dn }}" read by dn.exact="{{ ldap_admin_dn }}" write by dn.exact="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth" manage by dn.exact="{{ ldap_readonly_bind_dn }}" read by users read by anonymous none
+olcAccess: {3}to * by dn.exact="{{ ldap_replication_bind_dn }}" read by dn.exact="{{ ldap_admin_dn }}" write by dn.exact="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth" manage by self read by * none

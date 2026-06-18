@@ -1,0 +1,8 @@
+# Managed by Ansible. Do not edit directly.
+
+SLAPD_CONF=
+SLAPD_USER="openldap"
+SLAPD_GROUP="openldap"
+SLAPD_SERVICES="{% for url in ldap_listen_urls %}{{ url }}{% if not loop.last %} {% endif %}{% endfor %}"
+SLAPD_SENTINEL_FILE=/etc/ldap/noslapd
+SLAPD_OPTIONS=""

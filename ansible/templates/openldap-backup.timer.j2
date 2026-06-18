@@ -1,0 +1,9 @@
+[Unit]
+Description=Run OpenLDAP slapcat backup
+
+[Timer]
+OnCalendar={{ ldap_backup_on_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

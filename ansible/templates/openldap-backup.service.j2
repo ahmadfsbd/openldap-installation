@@ -1,0 +1,7 @@
+[Unit]
+Description=OpenLDAP slapcat backup
+Documentation=man:slapcat(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openldap-backup

@@ -1,0 +1,4 @@
+dn: cn=config
+changetype: modify
+replace: olcServerID
+olcServerID: {{ ldap_server_id }} {{ ldap_node_uri }}

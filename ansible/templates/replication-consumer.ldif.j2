@@ -1,0 +1,7 @@
+dn: {{ ldap_database_dn }}
+changetype: modify
+replace: olcSyncrepl
+olcSyncrepl: rid={{ ldap_replication_rid }} provider={{ ldap_provider_uri }} bindmethod=simple binddn="{{ ldap_replication_bind_dn }}" credentials="{{ ldap_replication_bind_password }}" searchbase="{{ ldap_base_dn }}" schemachecking=on type=refreshAndPersist retry="{{ ldap_replication_retry }}"
+-
+replace: olcUpdateRef
+olcUpdateRef: {{ ldap_provider_uri }}

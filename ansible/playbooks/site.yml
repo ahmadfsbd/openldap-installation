@@ -1,0 +1,359 @@
+# Configure a trusted-network OpenLDAP deployment.
+# This baseline uses plain LDAP on 389/tcp, local LDAPI for administration,
+# one writable provider, and one or more read replicas.
+- name: Configure trusted-network OpenLDAP baseline
+  hosts: openldap
+  become: true
+  handlers:
+    # Restart slapd after listener or replication changes that need a service
+    # restart to take effect.
+    - name: Restart slapd
+      ansible.builtin.systemd:
+        name: slapd
+        state: restarted
+
+    # Reload systemd after installing or changing backup unit/timer files.
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+  tasks:
+    # Fail early if the inventory cannot support the intended HA shape.
+    # There must be at least two LDAP nodes, and replication URIs must use LDAP.
+    - name: Validate inventory shape
+      ansible.builtin.assert:
+        that:
+          - groups['openldap'] | length >= 2
+          - ldap_provider_host in groups['openldap']
+          - ldap_provider_uri is match('^ldap://')
+          - ldap_node_uri is match('^ldap://')
+        fail_msg: "This baseline requires at least two OpenLDAP hosts and LDAP node/provider URIs."
+
+    # Fail early if placeholder secrets are still present. Password hashes are
+    # stored in LDAP; plaintext secrets should live in Ansible Vault.
+    - name: Validate secrets
+      ansible.builtin.assert:
+        that:
+          - ldap_debconf_admin_password != 'CHANGE_ME_USE_ANSIBLE_VAULT'
+          - ldap_admin_password_hash is match('^\\{')
+          - ldap_readonly_bind_password_hash is match('^\\{')
+          - ldap_replication_bind_password != 'CHANGE_ME_USE_ANSIBLE_VAULT'
+          - ldap_replication_bind_password_hash is match('^\\{')
+        fail_msg: "Set vaulted passwords and slappasswd hashes before running."
+      no_log: true
+
+    # Check whether slapd is already installed. Package preseeding is only needed
+    # before first install; rerunning password preseed questions after install can
+    # fail on some Debian/Ubuntu slapd packages.
+    - name: Check whether slapd is already installed
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - -f=${Status}
+          - slapd
+      register: ldap_slapd_package_status
+      changed_when: false
+      failed_when: false
+
+    # Answer Debian package questions before installing slapd so installation is
+    # non-interactive and creates the initial MDB database.
+    - name: Preseed slapd package choices
+      ansible.builtin.debconf:
+        name: slapd
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        - question: slapd/no_configuration
+          value: "false"
+          vtype: boolean
+        - question: slapd/domain
+          value: "{{ ldap_domain }}"
+          vtype: string
+        - question: shared/organization
+          value: "{{ ldap_organization }}"
+          vtype: string
+        - question: slapd/backend
+          value: MDB
+          vtype: select
+        - question: slapd/password1
+          value: "{{ ldap_debconf_admin_password }}"
+          vtype: password
+        - question: slapd/password2
+          value: "{{ ldap_debconf_admin_password }}"
+          vtype: password
+      when: "'install ok installed' not in ldap_slapd_package_status.stdout"
+      no_log: true
+
+    # Install the OpenLDAP server, CLI tools, and Python LDAP bindings used by
+    # some Ansible LDAP-related operations.
+    - name: Install OpenLDAP packages
+      ansible.builtin.apt:
+        name:
+          - slapd
+          - ldap-utils
+          - python3-ldap
+        state: present
+        update_cache: true
+
+    # Keep rendered LDIF files in a root-only directory because they may contain
+    # password hashes or replication credentials.
+    - name: Create OpenLDAP deployment working directory
+      ansible.builtin.file:
+        path: /root/openldap-deployment
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Render the cn=config and data bootstrap LDIF files on each node. The files
+    # are applied in later tasks through the local ldapi:/// socket.
+    - name: Render OpenLDAP configuration LDIFs
+      ansible.builtin.template:
+        src: "../templates/{{ item }}"
+        dest: "/root/openldap-deployment/{{ item | regex_replace('\\.j2$', '') }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - server-id.ldif.j2
+        - syncprov-module.ldif.j2
+        - syncprov-overlay.ldif.j2
+        - database-config.ldif.j2
+        - replication-consumer.ldif.j2
+        - bootstrap.ldif.j2
+      no_log: true
+
+    # Configure which URLs slapd listens on. This baseline listens on plain LDAP
+    # for network clients/replication and LDAPI for local administration.
+    - name: Configure slapd listener URLs
+      ansible.builtin.template:
+        src: ../templates/slapd.default.j2
+        dest: /etc/default/slapd
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart slapd
+
+    # Start slapd before modifying cn=config. cn=config changes are made through
+    # the local LDAPI socket with SASL EXTERNAL authentication.
+    - name: Ensure slapd is running before cn=config changes
+      ansible.builtin.systemd:
+        name: slapd
+        state: started
+        enabled: true
+
+    # Apply any pending restart from listener changes before configuring
+    # replication, so the LDAP listener state matches the rendered config.
+    - name: Flush listener changes before replication setup
+      ansible.builtin.meta: flush_handlers
+
+    # Set each node's OpenLDAP server ID. Replication needs stable, unique
+    # server IDs to distinguish provider/consumer state.
+    - name: Apply server ID
+      ansible.builtin.command:
+        argv:
+          - ldapmodify
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /root/openldap-deployment/server-id.ldif
+      register: ldap_server_id_apply
+      changed_when: ldap_server_id_apply.rc == 0
+      no_log: true
+
+    # Configure the main MDB database: root DN/password hash, indexes, limits,
+    # and ACLs for admin, replication, read-only bind, users, and anonymous auth.
+    - name: Apply database root, indexes, limits, and ACLs
+      ansible.builtin.command:
+        argv:
+          - ldapmodify
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /root/openldap-deployment/database-config.ldif
+      register: ldap_database_config_apply
+      changed_when: ldap_database_config_apply.rc == 0
+      no_log: true
+
+    # Check first so loading syncprov is idempotent. syncprov is the OpenLDAP
+    # overlay that makes provider-side replication state available to consumers.
+    - name: Check whether syncprov module is loaded
+      ansible.builtin.command:
+        argv:
+          - ldapsearch
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -LLL
+          - -b
+          - "{{ ldap_module_dn }}"
+          - olcModuleLoad
+      register: ldap_syncprov_module_check
+      changed_when: false
+      failed_when: false
+
+    # Load the syncprov module only if it is not already present in cn=config.
+    - name: Load syncprov module
+      ansible.builtin.command:
+        argv:
+          - ldapmodify
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /root/openldap-deployment/syncprov-module.ldif
+      when: "'syncprov' not in ldap_syncprov_module_check.stdout"
+      register: ldap_syncprov_module_apply
+      changed_when: ldap_syncprov_module_apply.rc == 0
+
+    # On the provider only, check whether the syncprov overlay has already been
+    # attached to the main MDB database.
+    - name: Check whether syncprov overlay exists on provider
+      ansible.builtin.command:
+        argv:
+          - ldapsearch
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -LLL
+          - -b
+          - "{{ ldap_database_dn }}"
+          - "(olcOverlay=syncprov)"
+          - dn
+      register: ldap_syncprov_overlay_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == ldap_provider_host
+
+    # On the provider only, enable syncprov so replicas can continuously pull
+    # directory changes with syncrepl.
+    - name: Enable syncprov overlay on provider
+      ansible.builtin.command:
+        argv:
+          - ldapadd
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /root/openldap-deployment/syncprov-overlay.ldif
+      when:
+        - inventory_hostname == ldap_provider_host
+        - ldap_syncprov_overlay_check.stdout | default('') | length == 0
+      register: ldap_syncprov_overlay_apply
+      changed_when: ldap_syncprov_overlay_apply.rc == 0
+
+    # On consumers only, configure syncrepl to pull from the provider over the
+    # private network using the replication bind account.
+    - name: Apply consumer replication configuration
+      ansible.builtin.command:
+        argv:
+          - ldapmodify
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /root/openldap-deployment/replication-consumer.ldif
+      when: inventory_hostname != ldap_provider_host
+      register: ldap_consumer_replication_apply
+      changed_when: ldap_consumer_replication_apply.rc == 0
+      no_log: true
+      notify: Restart slapd
+
+    # Bootstrap the base DN, OUs, read-only bind account, and replication bind
+    # account only when explicitly enabled and only on the provider.
+    - name: Apply initial directory data when explicitly enabled
+      ansible.builtin.command:
+        argv:
+          - ldapadd
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -c
+          - -f
+          - /root/openldap-deployment/bootstrap.ldif
+      when:
+        - inventory_hostname == ldap_provider_host
+        - ldap_apply_bootstrap_data | bool
+      register: ldap_bootstrap_apply
+      changed_when: ldap_bootstrap_apply.rc == 0
+      failed_when:
+        - ldap_bootstrap_apply.rc != 0
+        - "'Already exists' not in ldap_bootstrap_apply.stderr"
+      no_log: true
+
+    # Create the local backup root. Backups contain LDAP data and cn=config, so
+    # the directory is root-only.
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ ldap_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: ldap_backup_enabled | bool
+
+    # Install the slapcat backup script that exports both cn=config and the main
+    # directory database.
+    - name: Install OpenLDAP backup script
+      ansible.builtin.template:
+        src: ../templates/openldap-backup.sh.j2
+        dest: /usr/local/sbin/openldap-backup
+        owner: root
+        group: root
+        mode: "0700"
+      when: ldap_backup_enabled | bool
+
+    # Install the systemd service that runs one backup job.
+    - name: Install OpenLDAP backup service
+      ansible.builtin.template:
+        src: ../templates/openldap-backup.service.j2
+        dest: /etc/systemd/system/openldap-backup.service
+        owner: root
+        group: root
+        mode: "0644"
+      when: ldap_backup_enabled | bool
+      notify: Reload systemd
+
+    # Install the systemd timer that schedules recurring backups.
+    - name: Install OpenLDAP backup timer
+      ansible.builtin.template:
+        src: ../templates/openldap-backup.timer.j2
+        dest: /etc/systemd/system/openldap-backup.timer
+        owner: root
+        group: root
+        mode: "0644"
+      when: ldap_backup_enabled | bool
+      notify: Reload systemd
+
+    # Make systemd see the new or changed backup service/timer before enabling
+    # the timer.
+    - name: Flush systemd unit changes
+      ansible.builtin.meta: flush_handlers
+
+    # Enable and start the backup timer so backups continue after reboot.
+    - name: Enable OpenLDAP backup timer
+      ansible.builtin.systemd:
+        name: openldap-backup.timer
+        enabled: true
+        state: started
+      when: ldap_backup_enabled | bool

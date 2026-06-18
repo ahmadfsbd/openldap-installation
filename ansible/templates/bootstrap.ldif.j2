@@ -1,0 +1,32 @@
+dn: {{ ldap_base_dn }}
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+dc: {{ ldap_base_dc }}
+o: {{ ldap_organization }}
+
+dn: {{ ldap_users_ou }}
+objectClass: organizationalUnit
+ou: users
+
+dn: {{ ldap_groups_ou }}
+objectClass: organizationalUnit
+ou: groups
+
+dn: {{ ldap_service_accounts_ou }}
+objectClass: organizationalUnit
+ou: service-accounts
+
+dn: {{ ldap_readonly_bind_dn }}
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: ldap-readonly
+description: Read-only bind account for LDAP clients
+userPassword: {{ ldap_readonly_bind_password_hash }}
+
+dn: {{ ldap_replication_bind_dn }}
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: ldap-replicator
+description: Replication bind account for OpenLDAP syncrepl
+userPassword: {{ ldap_replication_bind_password_hash }}
