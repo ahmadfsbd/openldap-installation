@@ -57,6 +57,7 @@ openrc.sh
 os-*.sh
 
 # Local/editor
+Makefile.local
 .env
 .env.*
 !.env.example

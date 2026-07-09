@@ -84,6 +84,10 @@ Generate password hashes on a trusted machine:
 slappasswd
 ```
 
+On Ubuntu/Debian, `slappasswd` is shipped by the `slapd` package. It is not a
+separate package named `slappasswd`; use a trusted admin machine or an
+OpenLDAP VM where `slapd` is already installed.
+
 Store the resulting hashes in vaulted Ansible vars:
 
 ```yaml
@@ -204,6 +208,43 @@ sudo ldapsearch -Q -Y EXTERNAL -H ldapi:/// \
 
 The `contextCSN` values should converge between provider and consumers after
 changes replicate.
+
+## Production Hardening Runbook
+
+Before using this for real company-wide identity, finish and test these items:
+
+1. Add transport encryption. Either move the listener to LDAPS on `636/tcp` or
+   require StartTLS on `389/tcp`. That means issuing certificates, configuring
+   `slapd` TLS settings, updating Terraform listener/security-group rules,
+   updating client docs, and monitoring certificate expiry.
+
+2. Keep writes provider-only. Administrative writes should use local
+   `ldapi:///` on the provider or a provider-specific LDAP URL. If using the
+   repository Makefile, set `WRITE_SERVER_URL` to the provider node and keep
+   normal search `SERVER_URL` pointed at the load balancer. Because the provider
+   URL is normally private, run write commands from the Ansible/controller host,
+   a bastion, or another trusted machine with backend-network access.
+
+3. Add real monitoring and alerting. Monitor load-balancer TCP health,
+   authenticated LDAP bind/search, `slapd` service health, disk usage,
+   replication `contextCSN` convergence, backup freshness, and certificate
+   expiry when TLS is enabled.
+
+4. Make backups survivable. Keep local `slapcat` backups, copy them to encrypted
+   off-host storage, protect `cn=config` exports as sensitive, and run a restore
+   drill before trusting the service.
+
+5. Test provider promotion. The baseline does not automatically promote a
+   replica. Practice the failover process below on non-production infrastructure
+   and record the exact commands for your environment.
+
+6. Lock down secrets and access. Store Ansible values in Vault or a secret
+   manager, rotate any demo or pasted credentials, restrict all CIDRs/security
+   groups, and verify ACLs with both admin and read-only bind accounts.
+
+7. Validate client schema mappings. For each consuming app, confirm user object
+   class, login attribute, group object class, group member attribute, and search
+   bases with real `ldapsearch` output.
 
 ## Promotion And Failover
 

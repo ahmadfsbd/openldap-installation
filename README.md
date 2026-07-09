@@ -88,7 +88,8 @@ applications use LDAP behind the scenes, but LDAP itself is a network protocol.
 
 3. [docs/PRODUCTION.md](docs/PRODUCTION.md)  
    Deployment baseline: security boundary, provider/consumer replication,
-   required inputs, Ansible flow, verification, and failover notes.
+   required inputs, Ansible flow, verification, production hardening, and
+   failover notes.
 
 4. [docs/CLIENT_INTEGRATION.md](docs/CLIENT_INTEGRATION.md)  
    Values to give applications that need LDAP authentication or lookup.
@@ -104,8 +105,14 @@ applications use LDAP behind the scenes, but LDAP itself is a network protocol.
   and backup timer templates.
 - `scripts/`: local helper scripts for the Ansible virtualenv and generated
   inventory.
+- `Makefile`: convenience wrappers for LDAP search and simple user/group
+  management commands.
 - `docs/`: LDAP intro, architecture, production flow, client integration, and
   operations runbook.
+- `AGENTS.md`: project instructions for future coding agents.
+- `.github/copilot-instructions.md`: GitHub Copilot repository instructions.
+- `.github/skills/openldap-operations/SKILL.md`: reusable operations skill for
+  LDAP, Terraform, Ansible, and production-readiness work.
 
 ## Deployment Workflow
 
@@ -237,6 +244,9 @@ ldapsearch -x -H ldap://ldap.example.com:389 \
   "(uid=<username>)"
 ```
 
+For repeatable search and simple user/group commands, see the Makefile examples
+in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ## Safety Notes
 
 Terraform accepts broad CIDRs such as `0.0.0.0/0`. With no TLS, broad LDAP
@@ -254,8 +264,10 @@ Do not commit:
 - Replication credentials.
 - LDAP backup exports.
 
-Before real use, finish and test:
+Before real use, finish and test the hardening runbook in
+[docs/PRODUCTION.md](docs/PRODUCTION.md):
 
+- TLS or StartTLS.
 - Restore drills from `slapcat` backups.
 - Monitoring and alerting.
 - Replication health checks.

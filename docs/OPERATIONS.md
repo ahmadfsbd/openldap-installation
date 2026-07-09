@@ -15,6 +15,10 @@ Generate LDAP password hashes with `slappasswd` and store the hashes in vaulted
 Ansible vars. The `syncrepl` consumer configuration also needs the replication
 bind password in plaintext, so protect `cn=config` backups as sensitive.
 
+On Ubuntu/Debian, the `slappasswd` command is provided by the `slapd` package;
+there is no separate package named `slappasswd`. Run it on a trusted admin
+machine or on an OpenLDAP VM where `slapd` is already installed.
+
 This no-TLS baseline sends bind and replication credentials over the network in
 plaintext. Restrict LDAP access to trusted CIDRs and private backend networks.
 
@@ -24,8 +28,81 @@ Normal applications should use the read-only bind account through the load
 balancer. Administrative data changes should be run on the provider node through
 local `ldapi:///` with `sudo`, not through the load balancer.
 
+`ldapsearch` only reads data. Use `ldapadd`, `ldapmodify`, `ldapdelete`, or
+`ldappasswd` for changes.
+
 Examples below use the documentation domain. Replace `ldap.example.com` and
 `dc=example,dc=org` with the values from `ansible/group_vars/openldap.yml`.
+
+The repository Makefile wraps the common commands. It does not store passwords;
+search targets prompt for the read-only bind password, and write targets prompt
+for the LDAP admin password.
+
+Search targets use `SERVER_URL`, which can be the load balancer DNS name. Write
+targets use `WRITE_SERVER_URL`; for production, set that to the writable
+provider node, not the round-robin load balancer.
+
+`WRITE_SERVER_URL` is usually a private OpenStack address. That is intentional:
+run write commands from the Ansible/controller machine, a bastion, or another
+trusted host that can reach the backend network. If your laptop cannot reach the
+private provider IP, do not switch writes to the load balancer; run the command
+from a trusted network path instead.
+
+Show the defaults:
+
+```bash
+make show-config
+```
+
+Search for one user or group:
+
+```bash
+make user-search NAME=alice \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  BASE_DN=dc=example,dc=org
+
+make group-search NAME=rancher-admins \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  BASE_DN=dc=example,dc=org
+```
+
+Add a user, group, and group membership:
+
+```bash
+slappasswd > /tmp/alice.hash
+
+make add-user NAME=alice CN="Alice Smith" GIVEN_NAME=Alice SN=Smith \
+  MAIL=alice@example.org PASSWORD_HASH_FILE=/tmp/alice.hash \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+
+make add-group NAME=rancher-admins MEMBER_NAME=alice \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+
+make add-user-to-group GROUP_NAME=rancher-admins MEMBER_NAME=bob \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+```
+
+Create a service account:
+
+```bash
+slappasswd > /tmp/rancher-reader.hash
+
+make add-service-account NAME=rancher-ldap-reader \
+  SERVICE_DESCRIPTION="Rancher LDAP reader" \
+  PASSWORD_HASH_FILE=/tmp/rancher-reader.hash \
+  SERVER_URL=ldap://ldap.example.com:389 \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+```
+
+Use `PASSWORD_HASH_FILE` instead of passing `PASSWORD_HASH` directly when you do
+not want password hashes in shell history.
 
 Check that the read-only bind account can authenticate:
 
@@ -89,6 +166,9 @@ To add a user, first generate a password hash on a trusted machine:
 ```bash
 slappasswd
 ```
+
+If that command is missing on Ubuntu/Debian, remember it comes from the `slapd`
+package, not from a package named `slappasswd`.
 
 Create a user LDIF on the provider:
 

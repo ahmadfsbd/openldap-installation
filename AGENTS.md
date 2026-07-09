@@ -4,43 +4,52 @@ This project is a production-style OpenLDAP deployment for OpenStack VMs.
 
 ## Goal
 
-Build an OpenLDAP service that trusted LDAP clients can use through a stable,
-private-or-controlled LDAPS endpoint.
+Build an OpenLDAP service that trusted LDAP clients can use through a stable
+load-balancer DNS name. The current implementation is a trusted-network
+`ldap://` baseline on `389/tcp`; the production hardening path is LDAPS on
+`636/tcp` or StartTLS on `389/tcp`.
 
-Target shape:
+Current shape:
 
 ```text
 trusted LDAP clients
         |
-        | ldaps://ldap.example.com:636
+        | ldap://ldap.example.com:389
         v
 OpenStack Octavia TCP load balancer
         |
-        v
-private OpenLDAP VMs
+        +-- openldap-1, writable provider
+        +-- openldap-2, read replica / consumer
+        `-- openldap-N, read replica / consumer
 ```
 
 ## Key Decisions
 
 - Backend LDAP VMs should stay private.
 - Expose LDAP through an OpenStack Octavia TCP load balancer.
-- Prefer LDAPS on `636/tcp`.
-- Use `389/tcp` only for internal/admin traffic or StartTLS if explicitly
-  required.
+- The current baseline uses plain LDAP on `389/tcp` and must be restricted to
+  trusted networks.
+- Prefer LDAPS on `636/tcp` or StartTLS before broader production exposure.
 - Restrict external access with listener `allowed_cidrs` and security groups.
 - LDAP clients should connect to the load balancer DNS name, not directly to
   backend VMs.
+- Administrative writes should target the provider node, not the round-robin
+  load balancer.
 
-## Current Scaffold
+## Current Structure
 
 Existing structure:
 
 - `terraform/`: OpenStack VM, security group, Octavia LB, listener, pool,
-  monitor, and optional floating IP scaffold.
-- `ansible/`: initial OpenLDAP package/bootstrap scaffold.
+  monitor, outputs, and optional floating IP scaffold.
+- `ansible/`: OpenLDAP package/bootstrap, ACL, replication, and backup scaffold.
+- `scripts/`: Ansible virtualenv and inventory generation helpers.
 - `docs/`: architecture, client integration, and operations notes.
+- `Makefile`: LDAP search and simple user/group management helpers.
 
-The scaffold is not production-complete yet.
+The baseline is usable for trusted-network testing, but is not fully
+production-complete until the hardening checklist in `docs/PRODUCTION.md` has
+been implemented and tested.
 
 ## Do Not Commit
 
@@ -62,13 +71,12 @@ See `.gitignore`.
 Before real use, implement and test:
 
 - TLS certificate issuance and renewal.
-- OpenLDAP secure configuration and ACLs.
-- Password hashing/bootstrap workflow.
-- Dedicated admin and read-only bind accounts.
-- LDAP data/config backup and tested restore.
-- Multi-node replication, if HA is required.
+- LDAPS or StartTLS listener and client configuration.
+- Provider-only write tooling and documented operational process.
+- Off-host encrypted LDAP data/config backups and tested restore.
 - Monitoring and alerting.
 - Certificate expiry checks.
+- Replication health checks and provider promotion drills.
 - Upgrade and patching process.
 - Exact client schema mapping for users and groups.
 
@@ -78,8 +86,8 @@ LDAP client configuration will need values like:
 
 ```text
 Hostname/IP: ldap.example.com
-Port: 636
-TLS/LDAPS: enabled
+Port: 389
+TLS/LDAPS: disabled in the current trusted-network baseline
 Bind DN: cn=ldap-readonly,ou=service-accounts,dc=example,dc=org
 User Search Base: ou=users,dc=example,dc=org
 Group Search Base: ou=groups,dc=example,dc=org
@@ -99,16 +107,16 @@ Ansible syntax, once inventory/vars are prepared:
 ansible-playbook -i ansible/inventory.ini ansible/playbooks/site.yml --syntax-check
 ```
 
-LDAPS connectivity from a client:
+LDAP connectivity from a client:
 
 ```bash
-nc -vz ldap.example.com 636
+nc -vz ldap.example.com 389
 ```
 
 LDAP bind/search once credentials exist:
 
 ```bash
-ldapsearch -x -H ldaps://ldap.example.com:636 \
+ldapsearch -x -H ldap://ldap.example.com:389 \
   -D "cn=ldap-readonly,ou=service-accounts,dc=example,dc=org" \
   -W \
   -b "dc=example,dc=org" \
