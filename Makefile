@@ -36,10 +36,11 @@ SERVICE_DESCRIPTION ?= Service account
 LDAPSEARCH ?= ldapsearch
 LDAPADD ?= ldapadd
 LDAPMODIFY ?= ldapmodify
+LDAPDELETE ?= ldapdelete
 
 -include Makefile.local
 
-.PHONY: help show-config require-name require-password-hash user-search group-search users groups add-user add-group add-user-to-group add-service-account
+.PHONY: help show-config require-name require-password-hash user-search group-search users groups add-user add-group add-user-to-group remove-user-from-group delete-user delete-group delete-service-account add-service-account
 
 help:
 	@printf '%s\n' 'OpenLDAP search helpers'
@@ -60,6 +61,10 @@ help:
 	@printf '%s\n' '  make add-user NAME=alice CN="Alice Smith" SN=Smith MAIL=alice@example.org PASSWORD_HASH_FILE=/tmp/alice.hash'
 	@printf '%s\n' '  make add-group NAME=rancher-admins MEMBER_NAME=alice'
 	@printf '%s\n' '  make add-user-to-group GROUP_NAME=rancher-admins MEMBER_NAME=bob'
+	@printf '%s\n' '  make remove-user-from-group GROUP_NAME=rancher-admins MEMBER_NAME=bob'
+	@printf '%s\n' '  make delete-user NAME=alice'
+	@printf '%s\n' '  make delete-group NAME=rancher-admins'
+	@printf '%s\n' '  make delete-service-account NAME=rancher-ldap-reader'
 	@printf '%s\n' '  make add-service-account NAME=rancher-ldap-reader PASSWORD_HASH_FILE=/tmp/rancher-reader.hash'
 	@printf '%s\n' '  make show-config'
 	@printf '%s\n' ''
@@ -214,6 +219,38 @@ add-user-to-group:
 		printf '%s\n' "member: $$member_dn"; \
 	} > "$$tmp"; \
 	$(LDAPMODIFY) -x -H '$(WRITE_SERVER_URL)' -D '$(WRITE_BIND_DN)' -W -f "$$tmp"
+
+remove-user-from-group:
+	@if [ -z "$(GROUP_NAME)" ]; then \
+		printf '%s\n' 'Set GROUP_NAME, for example: make remove-user-from-group GROUP_NAME=rancher-admins MEMBER_NAME=alice' >&2; \
+		exit 2; \
+	fi; \
+	member_dn='$(MEMBER_DN)'; \
+	if [ -z "$$member_dn" ]; then \
+		if [ -z "$(MEMBER_NAME)" ]; then \
+			printf '%s\n' 'Set MEMBER_NAME or MEMBER_DN, for example: make remove-user-from-group GROUP_NAME=rancher-admins MEMBER_NAME=alice' >&2; \
+			exit 2; \
+		fi; \
+		member_dn='uid=$(MEMBER_NAME),$(USERS_BASE)'; \
+	fi; \
+	tmp="$$(mktemp)"; \
+	trap 'rm -f "$$tmp"' EXIT; \
+	{ \
+		printf '%s\n' 'dn: $(GROUP_DN)'; \
+		printf '%s\n' 'changetype: modify'; \
+		printf '%s\n' 'delete: member'; \
+		printf '%s\n' "member: $$member_dn"; \
+	} > "$$tmp"; \
+	$(LDAPMODIFY) -x -H '$(WRITE_SERVER_URL)' -D '$(WRITE_BIND_DN)' -W -f "$$tmp"
+
+delete-user: require-name
+	$(LDAPDELETE) -x -H '$(WRITE_SERVER_URL)' -D '$(WRITE_BIND_DN)' -W 'uid=$(NAME),$(USERS_BASE)'
+
+delete-group: require-name
+	$(LDAPDELETE) -x -H '$(WRITE_SERVER_URL)' -D '$(WRITE_BIND_DN)' -W 'cn=$(NAME),$(GROUPS_BASE)'
+
+delete-service-account: require-name
+	$(LDAPDELETE) -x -H '$(WRITE_SERVER_URL)' -D '$(WRITE_BIND_DN)' -W 'cn=$(NAME),$(SERVICE_ACCOUNTS_BASE)'
 
 add-service-account: require-name require-password-hash
 	@tmp="$$(mktemp)"; \
