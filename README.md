@@ -76,6 +76,71 @@ Ansible configures:
 This repo does not install a web login page or LDAP web admin UI. Browser-based
 applications use LDAP behind the scenes, but LDAP itself is a network protocol.
 
+## POSIX User And Group IDs
+
+This baseline supports Linux-style numeric IDs, so user and group entries can
+include:
+
+```ldif
+uidNumber: 2001
+gidNumber: 2001
+homeDirectory: /home/bob
+```
+
+```ldif
+gidNumber: 2001
+memberUid: bob
+```
+
+The OpenLDAP server loads the POSIX/NIS schema during provisioning, which allows
+`posixAccount` and `posixGroup` entries to use these attributes. The helper in
+`Makefile` emits the required `posixAccount` values when you pass `UID_NUMBER`
+and `GID_NUMBER`, using `/home/<uid>` for `homeDirectory` unless you override it
+with `HOME_DIRECTORY`. For group creation, it emits `posixGroup` values when you
+pass `GID_NUMBER`.
+
+`homeDirectory` is required by the standard `posixAccount` object class because
+it models a Unix-style login account, similar to an `/etc/passwd` entry. The LDAP
+value is only a path string, such as `/home/bob`; adding it to LDAP does not
+create that directory on any host. If Linux clients use LDAP for logins, the
+directory must exist on the login host or be provided by shared storage such as
+NFS or autofs. Application-only LDAP users that do not need Unix UID/GID values
+can stay as non-POSIX `inetOrgPerson` entries instead.
+
+Example user creation:
+
+```bash
+make add-user \
+  NAME=bob \
+  UID_NUMBER=2001 \
+  GID_NUMBER=2001 \
+  HOME_DIRECTORY=/home/bob \
+  CN="Bob Smith" \
+  GIVEN_NAME=Bob \
+  SN=Smith \
+  MAIL=bob@example.org \
+  PASSWORD_HASH_FILE=/tmp/bob.hash
+```
+
+Example group creation:
+
+```bash
+make add-group \
+  NAME=dev \
+  GID_NUMBER=2001 \
+  MEMBER_NAME=bob
+```
+
+Example update of an existing user or group:
+
+```bash
+make update-user NAME=bob UID_NUMBER=2501 GID_NUMBER=2501 HOME_DIRECTORY=/home/bob
+make update-group NAME=dev GID_NUMBER=3001
+```
+
+This is useful for Linux clients and Unix-like apps that need stable numeric
+UID/GID values instead of only `inetOrgPerson` and `groupOfNames` entries.
+
 ## Read The Docs In Order
 
 1. [docs/LDAP_INTRO.md](docs/LDAP_INTRO.md)  

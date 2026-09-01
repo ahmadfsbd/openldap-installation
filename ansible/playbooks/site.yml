@@ -144,6 +144,44 @@
         state: started
         enabled: true
 
+    # Load the POSIX/NIS schema so `posixAccount`, `posixGroup`, `uidNumber`,
+    # and `gidNumber` are accepted by the server before helper scripts add them.
+    - name: Check whether POSIX/NIS schema is already loaded
+      ansible.builtin.command:
+        argv:
+          - ldapsearch
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -LLL
+          - -b
+          - cn=schema,cn=config
+          - '(cn=nis)'
+          - dn
+      register: ldap_nis_schema_check
+      changed_when: false
+      failed_when: false
+
+    - name: Load POSIX/NIS schema
+      ansible.builtin.command:
+        argv:
+          - ldapadd
+          - -Q
+          - -Y
+          - EXTERNAL
+          - -H
+          - ldapi:///
+          - -f
+          - /etc/ldap/schema/nis.ldif
+      when: ldap_nis_schema_check.stdout | default('') | length == 0
+      register: ldap_nis_schema_apply
+      changed_when: ldap_nis_schema_apply.rc == 0
+      failed_when:
+        - ldap_nis_schema_apply.rc != 0
+        - "'already exists' not in ldap_nis_schema_apply.stderr | lower"
+
     # Apply any pending restart from listener changes before configuring
     # replication, so the LDAP listener state matches the rendered config.
     - name: Flush listener changes before replication setup

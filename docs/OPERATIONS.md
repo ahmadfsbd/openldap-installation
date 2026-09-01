@@ -104,6 +104,37 @@ make add-service-account NAME=rancher-ldap-reader \
 Use `PASSWORD_HASH_FILE` instead of passing `PASSWORD_HASH` directly when you do
 not want password hashes in shell history.
 
+Reset a user or service account password. LDAP stores only salted hashes, so a
+lost password cannot be recovered; set a new one instead. Without a hash,
+`ldappasswd` prompts for the new password and the provider hashes it:
+
+```bash
+make reset-password NAME=alice \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+
+make reset-service-account-password NAME=rancher-ldap-reader \
+  WRITE_SERVER_URL=ldap://openldap-1-private-ip:389 \
+  BASE_DN=dc=example,dc=org
+```
+
+To set a pre-generated hash instead, pass `PASSWORD_HASH_FILE`:
+
+```bash
+slappasswd > /tmp/alice.hash
+make reset-password NAME=alice PASSWORD_HASH_FILE=/tmp/alice.hash
+```
+
+Confirm the new password with a bind as that account:
+
+```bash
+ldapwhoami -x -H ldap://ldap.example.com:389 \
+  -D "uid=alice,ou=users,dc=example,dc=org" -W
+```
+
+In the current plain-LDAP baseline, both the admin and the new password cross
+the network in plaintext, so run resets only from the trusted private network.
+
 Check that the read-only bind account can authenticate:
 
 ```bash
@@ -111,6 +142,14 @@ ldapwhoami -x \
   -H ldap://ldap.example.com:389 \
   -D "cn=ldap-readonly,ou=service-accounts,dc=example,dc=org" \
   -W
+```
+
+For repeatable searches, put the read-only bind password in a local file with
+`0600` permissions and pass it with `BIND_PASSWORD_FILE`. Do not commit this
+file.
+
+```bash
+make user-search NAME=alice BIND_PASSWORD_FILE=/path/to/readonly.password
 ```
 
 Search the user container:
